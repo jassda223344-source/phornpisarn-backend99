@@ -5,7 +5,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 
-const app = express(); // 👈 ต้องประกาศก่อนใช้
+const app = express();
 const PORT = process.env.PORT || 3000;
 const SECRET = 'PHORNPISARN_SECRET';
 
@@ -16,8 +16,8 @@ app.use('/uploads', express.static('uploads'));
 const upload = multer({ dest: 'uploads/' });
 const db = new sqlite3.Database('./database.db');
 
-// ===== DATABASE =====
-db.serialize(() => {
+// ===== DATABASE + SEED (สำคัญมาก) =====
+db.serialize(async () => {
   db.run(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     username TEXT UNIQUE,
@@ -35,21 +35,24 @@ db.serialize(() => {
     pay_type TEXT,
     pay_image TEXT
   )`);
-});
 
-// ===== SEED USERS =====
-(async () => {
+  // 🔥 ล้าง user เก่า (กันพัง)
+  db.run(`DELETE FROM users`);
+
   const users = [
     ['JOY2','08314025547788'],
     ['Yanisa','06602070517788'],
     ['Pisarn','08333855287788'],
     ['Ouee1','0838926475']
   ];
+
   for (const [u,p] of users) {
     const hash = await bcrypt.hash(p,10);
-    db.run(`INSERT OR IGNORE INTO users VALUES(null,?,?)`,[u,hash]);
+    db.run(`INSERT INTO users (username,password) VALUES (?,?)`,[u,hash]);
   }
-})();
+
+  console.log('Users seeded');
+});
 
 // ===== AUTH =====
 const auth = (req,res,next)=>{
@@ -63,28 +66,18 @@ const auth = (req,res,next)=>{
 
 // ===== LOGIN =====
 app.post('/login',(req,res)=>{
-  const {username,password}=req.body;
-  db.get(`SELECT * FROM users WHERE username=?`,[username],async(_,u)=>{
-    if(!u) return res.sendStatus(401);
-    if(await bcrypt.compare(password,u.password)){
+  const {username,password} = req.body;
+
+  db.get(
+    `SELECT * FROM users WHERE username=?`,
+    [username],
+    async (err,u)=>{
+      if(!u) return res.status(401).json({msg:'user not found'});
+      const ok = await bcrypt.compare(password,u.password);
+      if(!ok) return res.status(401).json({msg:'wrong password'});
       res.json({token:jwt.sign({username},SECRET)});
-    }else res.sendStatus(401);
-  });
-});
-
-// ===== ADD BILL =====
-app.post('/bill',auth,upload.single('image'),(req,res)=>{
-  const {company,amount,datetime,recorder}=req.body;
-  db.run(
-    `INSERT INTO bills VALUES(null,?,?,?,?,?,?,?,?)`,
-    [company,amount,datetime,recorder,req.file?.path,'รอจ่าย',null,null],
-    ()=>res.json({success:true})
+    }
   );
-});
-
-// ===== LIST BILL =====
-app.get('/bill',auth,(req,res)=>{
-  db.all(`SELECT * FROM bills ORDER BY id DESC`,[],(_,r)=>res.json(r));
 });
 
 // ===== TEST =====
